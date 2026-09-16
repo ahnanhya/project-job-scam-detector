@@ -1,0 +1,137 @@
+import React, { useState } from "react";
+
+function Home({ onAnalyze }) {
+
+  const [jobText, setJobText] = useState("");
+
+  const handleAnalyze = () => {
+
+    if (jobText.trim() === "") {
+      alert("Please enter a job description first.");
+      return;
+    }
+
+    onAnalyze(jobText);
+  };
+
+  return (
+    <main className="home-page">
+
+      <section className="hero-section">
+
+        <div className="hero-badge">
+          🛡️ AI-POWERED JOB SAFETY
+        </div>
+
+        <h1>
+          Is this job
+          <span> really safe?</span>
+        </h1>
+
+        <p className="hero-description">
+          Detect suspicious recruitment patterns before
+          you lose money or personal information.
+        </p>
+
+        <div className="input-card">
+
+          <div className="input-header">
+
+            <div>
+              <h3>Check a Job</h3>
+
+              <p>
+                Paste a job description or recruiter message
+              </p>
+            </div>
+
+            <span className="input-icon">
+              🔍
+            </span>
+
+          </div>
+
+          <textarea
+            value={jobText}
+            onChange={(e) => setJobText(e.target.value)}
+            placeholder="Paste the job description, recruiter message or offer details here..."
+          />
+
+          <button
+            className="primary-button"
+            onClick={handleAnalyze}
+          >
+            🔍 Analyze Job
+          </button>
+
+          <div className="upload-options">
+
+            <button className="upload-button">
+              📷
+              <span>
+                Upload Screenshot
+              </span>
+            </button>
+
+            <button className="upload-button">
+              📄
+              <span>
+                Upload Offer Letter
+              </span>
+            </button>
+
+          </div>
+
+        </div>
+
+      </section>
+
+      <section className="features-section">
+
+        <h2>
+          More than just a fake-job checker
+        </h2>
+
+        <p>
+          JobGuard analyzes behavior, connects suspicious
+          cases and identifies emerging scam campaigns.
+        </p>
+
+        <div className="feature-grid">
+
+          <div className="feature-card">
+            <div className="feature-icon">🎯</div>
+            <h3>Risk Detection</h3>
+            <p>
+              Identify suspicious signals and calculate
+              an explainable risk score.
+            </p>
+          </div>
+
+          <div className="feature-card">
+            <div className="feature-icon">🧬</div>
+            <h3>Scam DNA</h3>
+            <p>
+              Detect recurring scam behaviors instead of
+              relying only on keywords.
+            </p>
+          </div>
+
+          <div className="feature-card">
+            <div className="feature-icon">🔗</div>
+            <h3>Campaign Detection</h3>
+            <p>
+              Connect seemingly different job scams through
+              hidden shared signals.
+            </p>
+          </div>
+
+        </div>
+
+      </section>
+
+    </main>
+  );
+}
+
+export default Home;
