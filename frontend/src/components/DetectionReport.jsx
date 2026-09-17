@@ -1,37 +1,65 @@
 import React from "react";
 
 function DetectionReport({ jobData }) {
-  const signals = jobData.signals?.length
-    ? jobData.signals
+  const safeJobData = jobData || {};
+
+  const signals = safeJobData.signals?.length
+    ? safeJobData.signals
     : ["Suspicious recruitment behavior detected."];
 
-  const scamDNA = jobData.scam_dna?.length
-    ? jobData.scam_dna
+  const scamDNA = safeJobData.scam_dna?.length
+    ? safeJobData.scam_dna
     : [
         "Payment request before onboarding",
         "Urgent hiring without interview",
         "Personal data collection before verification"
       ];
 
-  const explanations = jobData.explanations?.length
-    ? jobData.explanations
+  const explanations = safeJobData.explanations?.length
+    ? safeJobData.explanations
     : ["The job posting contains several strong scam indicators."];
 
-  const campaignIndicators = jobData.campaign_indicators?.length
-    ? jobData.campaign_indicators
+  const campaignIndicators = safeJobData.campaign_indicators?.length
+    ? safeJobData.campaign_indicators
     : [
         "Shared recruiter identity patterns",
         "Repeated remote-only job messaging",
         "High-risk fee and verification language"
       ];
 
-  const emails = jobData.entities?.emails?.length
-    ? jobData.entities.emails
+  const emails = safeJobData.entities?.emails?.length
+    ? safeJobData.entities.emails
     : [];
 
-  const phones = jobData.entities?.phones?.length
-    ? jobData.entities.phones
+  const phones = safeJobData.entities?.phones?.length
+    ? safeJobData.entities.phones
     : [];
+
+  const campaignAnalysis =
+    safeJobData.campaign_analysis ||
+    safeJobData.campaignAnalysis ||
+    safeJobData.data?.campaign_analysis ||
+    {};
+
+  const campaignDetected = Boolean(campaignAnalysis.campaign_detected);
+  const campaignConfidence = Number(campaignAnalysis.campaign_confidence ?? 0);
+  const connectedCases = Number(
+    campaignAnalysis.connected_cases ??
+      (Array.isArray(campaignAnalysis.matches) ? campaignAnalysis.matches.length : 0)
+  );
+  const sharedEntities = Array.isArray(campaignAnalysis.shared_entities)
+    ? campaignAnalysis.shared_entities
+    : [];
+  const sharedBehavior = Array.isArray(campaignAnalysis.shared_behavior)
+    ? campaignAnalysis.shared_behavior
+    : [];
+  const matches = Array.isArray(campaignAnalysis.matches)
+    ? campaignAnalysis.matches
+    : [];
+
+  const campaignStatusText = campaignDetected
+    ? "Potential Campaign Connection"
+    : "No Strong Campaign Connection";
 
   const basis = [
     "Looked for urgent language such as 'immediate hiring' or 'reply now'.",
@@ -55,10 +83,10 @@ function DetectionReport({ jobData }) {
           <div className="warning-symbol">⚠️</div>
           <p className="risk-title">RISK SCORE</p>
           <div className="risk-score">
-            {jobData.score}
+            {safeJobData.score}
             <span>/100</span>
           </div>
-          <div className="risk-level">🔴 {jobData.risk}</div>
+          <div className="risk-level">🔴 {safeJobData.risk}</div>
           <p className="risk-note">This job shows strong signs of a fraudulent recruitment pattern.</p>
         </div>
 
@@ -91,6 +119,138 @@ function DetectionReport({ jobData }) {
             </div>
           ))}
         </div>
+      </div>
+
+      <div className="report-section">
+        <h2>🧠 Campaign intelligence</h2>
+        <div
+          className="campaign-alert"
+          style={{
+            borderLeft: campaignDetected ? "4px solid #f59e0b" : "4px solid #10b981",
+            background: campaignDetected ? "#fff7ed" : "#ecfdf5"
+          }}
+        >
+          <strong>{campaignStatusText}</strong>
+          <p>
+            {campaignAnalysis.message ||
+              (campaignDetected
+                ? "Shared indicators found in related suspicious cases."
+                : "No strong campaign connection found in the historical scam dataset.")}
+          </p>
+        </div>
+
+        <div className="shared-grid" style={{ marginTop: "18px" }}>
+          <div>
+            <strong>Confidence</strong>
+            <span>{campaignConfidence} / 100</span>
+          </div>
+
+          <div>
+            <strong>Connected cases</strong>
+            <span>{connectedCases}</span>
+          </div>
+
+          <div>
+            <strong>Status</strong>
+            <span>{campaignDetected ? "Potential campaign connection" : "No strong campaign connection"}</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="report-section">
+        <h2>📌 Shared indicators</h2>
+
+        {sharedEntities.length > 0 ? (
+          <div className="shared-grid">
+            {sharedEntities.map((entity, index) => (
+              <div key={`${entity?.type || "entity"}-${entity?.value || index}`}>
+                <strong>{entity?.type || "Entity"}</strong>
+                <span>
+                  {entity?.value || "Unknown value"}
+                </span>
+                {entity?.reason ? <small>{entity.reason}</small> : null}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="report-subtitle">No shared entities were detected in the campaign analysis.</p>
+        )}
+      </div>
+
+      <div className="report-section">
+        <h2>🔎 Shared scam behavior</h2>
+
+        {sharedBehavior.length > 0 ? (
+          <div className="shared-grid">
+            {sharedBehavior.map((behavior, index) => (
+              <div key={`${behavior}-${index}`}>
+                <strong>{behavior}</strong>
+                <span>Shared scam pattern</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="report-subtitle">No shared scam behavior patterns were found.</p>
+        )}
+      </div>
+
+      <div className="report-section">
+        <h2>🧾 Related suspicious cases</h2>
+
+        {matches.length > 0 ? (
+          <div className="summary-grid">
+            {matches.map((match, index) => {
+              const historicalCase = match?.historical_case || {};
+              const caseEntities = Array.isArray(match?.shared_entities)
+                ? match.shared_entities
+                : [];
+              const caseBehaviors = Array.isArray(match?.shared_behavior)
+                ? match.shared_behavior
+                : [];
+
+              return (
+                <div key={`${historicalCase?.id || index}-detail`} className="summary-box">
+                  <h3>{historicalCase.title || "Historical scam case"}</h3>
+                  <p>
+                    <strong>Company:</strong> {historicalCase.company || "Unknown"}
+                  </p>
+                  <p>
+                    <strong>Campaign score:</strong> {match?.campaign_score ?? 0}
+                  </p>
+                  <p>
+                    <strong>Similarity:</strong> {match?.similarity ?? 0}%
+                  </p>
+
+                  {caseEntities.length > 0 ? (
+                    <div>
+                      <p><strong>Shared entities:</strong></p>
+                      <ul className="summary-list">
+                        {caseEntities.map((entity, entityIndex) => (
+                          <li key={`${entity?.type || "entity"}-${entity?.value || entityIndex}`}>
+                            {entity?.type || "Entity"}: {entity?.value || "Unknown"}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+
+                  {caseBehaviors.length > 0 ? (
+                    <div>
+                      <p><strong>Shared behavior:</strong></p>
+                      <ul className="summary-list">
+                        {caseBehaviors.map((behavior, behaviorIndex) => (
+                          <li key={`${behavior}-${behaviorIndex}`}>{behavior}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="report-subtitle">No related suspicious cases were found from the campaign dataset.</p>
+        )}
       </div>
 
       <div className="report-section">

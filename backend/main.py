@@ -2,6 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from services.scam_detector import analyze_job
+from services.scam_campaigns import get_local_campaign_jobs
+from services.campaign_detector import detect_campaign
 from routes.job_verification import router as job_verification_router
 
 
@@ -68,9 +70,37 @@ def analyze(job: dict):
 
     result = analyze_job(text)
 
+    campaign_result = {
+        "campaign_detected": False,
+        "campaign_confidence": 0,
+        "connected_cases": 0,
+        "shared_entities": [],
+        "shared_behavior": [],
+        "matches": [],
+        "message": "Campaign analysis unavailable."
+    }
+
+    try:
+        campaign_result = detect_campaign(
+            text,
+            result.get("entities", {}),
+            get_local_campaign_jobs()
+        )
+    except Exception:
+        campaign_result = {
+            "campaign_detected": False,
+            "campaign_confidence": 0,
+            "connected_cases": 0,
+            "shared_entities": [],
+            "shared_behavior": [],
+            "matches": [],
+            "message": "Campaign analysis unavailable."
+        }
+
     return {
         "status": "success",
-        "data": result
+        "data": result,
+        "campaign_analysis": campaign_result
     }
 
 
