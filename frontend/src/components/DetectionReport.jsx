@@ -124,10 +124,11 @@ function DetectionReport({ jobData }) {
       <div className="report-section">
         <h2>🧠 Campaign intelligence</h2>
         <div
-          className="campaign-alert"
+          className={campaignDetected
+            ? "campaign-alert campaign-alert-positive"
+            : "campaign-alert campaign-alert-neutral"}
           style={{
-            borderLeft: campaignDetected ? "4px solid #f59e0b" : "4px solid #10b981",
-            background: campaignDetected ? "#fff7ed" : "#ecfdf5"
+            borderLeft: campaignDetected ? "4px solid #f59e0b" : "4px solid #10b981"
           }}
         >
           <strong>{campaignStatusText}</strong>

@@ -1,11 +1,4 @@
-"""Simple campaign connection detection for suspicious job posts.
-
-This prototype compares a newly submitted job posting with historical scam job
-records stored in the backend. It focuses on shared infrastructure such as a
-phone number, payment/UPI ID, email address, and repeated scam behaviour.
-
-The logic intentionally stays simple and uses only the Python standard library.
-"""
+"""Explainable campaign-connection detection for suspicious job postings."""
 
 from __future__ import annotations
 
@@ -15,7 +8,7 @@ from typing import Any, Iterable, Mapping
 
 try:
     from services.scam_campaigns import get_local_campaign_jobs
-except ImportError:  # pragma: no cover - small compatibility fallback
+except ImportError:  # pragma: no cover - compatibility when imported as a package
     try:
         from backend.services.scam_campaigns import get_local_campaign_jobs
     except ImportError:  # pragma: no cover
@@ -23,353 +16,369 @@ except ImportError:  # pragma: no cover - small compatibility fallback
 
 
 _EMAIL_RE = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
-_PHONE_RE = re.compile(r"(?:\+?\s*(?:91|0)?\s*)?([6-9]\d{9})")
-_PAYMENT_CONTEXT_RE = re.compile(
-    r"(?:upi(?:\s*(?:id|payment\s*id|payment\s*reference|reference|payment\s*to|account))?|"
-    r"payment\s*(?:id|reference)|payment\s+to|payment\s+through|upi\s+id)"
-    r"\s*[:\-]?\s*([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}|[A-Za-z0-9._@+\-]{5,})",
+_URL_RE = re.compile(r"https?://[^\s)]+|www\.[^\s)]+", re.IGNORECASE)
+_DOMAIN_RE = re.compile(r"(?<![@\w])(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?![\w])", re.IGNORECASE)
+_PAYMENT_ID_RE = re.compile(
+    r"(?:upi|payment\s*(?:id|reference)?|pay(?:ment)?\s+to|payment\s+through)"
+    r"\s*[:\-]?\s*([A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+|[A-Za-z0-9._%+\-]{5,})",
     re.IGNORECASE,
 )
 
-
 _BEHAVIOR_PATTERNS = {
-    "PAYMENT_REQUEST": [
-        "registration fee",
-        "processing fee",
-        "joining fee",
-        "training fee",
-        "onboarding fee",
-        "payment required",
-        "security deposit",
-        "pay upfront",
-        "send money",
-        "pay rs",
-        "pay ₹",
-        "payment to",
-        "pay a fee",
-    ],
-    "FAST_SELECTION": [
-        "immediate selection",
-        "instant selection",
-        "direct selection",
-        "no interview",
-        "without interview",
-        "selected immediately",
-        "guaranteed selection",
-    ],
-    "MESSAGING_APP": [
-        "whatsapp",
-        "telegram",
-    ],
-    "REMOTE_JOB": [
-        "remote job",
-        "work from home",
-        "wfh",
-        "remote",
-    ],
-    "DATA_REQUEST": [
-        "aadhaar",
-        "aadhar",
-        "pan card",
-        "bank details",
-        "bank account",
-        "kyc",
-        "otp",
-        "personal information",
-        "identity proof",
-        "passport",
-    ],
-    "URGENCY": [
-        "urgent",
-        "immediately",
-        "reply now",
-        "hurry",
-        "limited seats",
-    ],
+    "Fee Demand": (
+        "registration fee", "application fee", "processing fee", "joining fee",
+        "training fee", "onboarding fee", "activation fee", "verification fee",
+        "security deposit", "pay a fee", "payment required", "pay upfront",
+        "send money", "pay ₹", "pay rs",
+    ),
+    "Urgent Selection": (
+        "immediate selection", "instant selection", "direct selection",
+        "selected immediately", "guaranteed selection", "urgent", "immediately",
+        "reply now", "act now", "limited seats", "limited slots",
+    ),
+    "No Interview": (
+        "no interview", "without interview", "selected without interview",
+    ),
+    "WhatsApp Recruitment": ("whatsapp",),
+    "Telegram Recruitment": ("telegram",),
+    "Document Request": (
+        "aadhaar", "aadhar", "pan card", "pan number", "identity proof",
+        "id proof", "passport", "kyc", "otp",
+    ),
+    "Bank Details Request": (
+        "bank details", "bank account", "account number", "password",
+    ),
+    "No Experience Required": (
+        "no experience", "without experience", "freshers can apply",
+        "anyone can apply", "no skills required", "no qualification required",
+    ),
+    "Personal Email Recruitment": (
+        "@gmail.com", "@yahoo.com", "@hotmail.com", "@outlook.com",
+    ),
+    "Unrealistic Salary Claim": (
+        "high salary", "earn huge", "earn lakhs", "easy income", "high income",
+        "earn money easily", "work from home and earn",
+    ),
 }
 
 
-def _clean_text(text: str) -> str:
-    value = text or ""
-    value = re.sub(r"https?://\S+|www\.\S+", " ", value, flags=re.IGNORECASE)
-    value = re.sub(r"\s+", " ", value)
-    return value.strip()
+def _clean_text(value: Any) -> str:
+    if value is None:
+        return ""
+    return re.sub(r"\s+", " ", str(value)).strip()
 
 
-def _normalise_phone(value: str) -> str:
-    digits = re.sub(r"\D", "", value or "")
+def _normalise_phone(value: Any) -> str:
+    digits = re.sub(r"\D", "", _clean_text(value))
+    if digits.startswith("0091"):
+        digits = digits[2:]
     if len(digits) == 12 and digits.startswith("91"):
         digits = digits[2:]
-    if len(digits) == 10 and digits[0] in "6789":
-        return digits
-    return ""
+    return digits if len(digits) == 10 and digits[0] in "6789" else ""
 
 
 def _extract_phone_numbers(text: str) -> list[str]:
-    phones: list[str] = []
-    for match in _PHONE_RE.finditer(text or ""):
-        value = _normalise_phone(match.group(0))
-        if value:
-            phones.append(value)
+    phones = []
+    for match in re.finditer(r"(?:\+?\s*\d[\d().\-\s]{8,}\d)", text or ""):
+        phone = _normalise_phone(match.group(0))
+        if phone:
+            phones.append(phone)
     return list(dict.fromkeys(phones))
 
 
 def _extract_emails(text: str) -> list[str]:
-    emails = []
-    for match in _EMAIL_RE.finditer(text or ""):
-        email = match.group(0).strip().lower()
-        emails.append(email)
-    return list(dict.fromkeys(emails))
+    return list(dict.fromkeys(match.group(0).lower() for match in _EMAIL_RE.finditer(text or "")))
+
+
+def _extract_urls(text: str) -> list[str]:
+    urls = []
+    for match in _URL_RE.finditer(text or ""):
+        urls.append(match.group(0).rstrip(".,;:)").lower())
+    return list(dict.fromkeys(urls))
+
+
+def _extract_domains(text: str) -> list[str]:
+    email_domains = {email.rsplit("@", 1)[1] for email in _extract_emails(text)}
+    domains = []
+    for match in _DOMAIN_RE.finditer(text or ""):
+        domain = match.group(0).lower().rstrip(".,;:)")
+        if domain not in email_domains and not domain.startswith("www."):
+            domains.append(domain)
+    for url in _extract_urls(text):
+        domain_match = re.match(r"https?://([^/]+)|www\.([^/]+)", url)
+        if domain_match:
+            domain = (domain_match.group(1) or domain_match.group(2)).lower()
+            if domain not in domains:
+                domains.append(domain)
+    return list(dict.fromkeys(domains))
 
 
 def _extract_payment_ids(text: str) -> list[str]:
-    payment_ids: list[str] = []
-    text = text or ""
-    lower_text = text.lower()
-    payment_context_keywords = (
-        "upi id",
-        "upi payment id",
-        "payment id",
-        "payment reference",
-        "payment to",
-        "payment through",
-        "upi",
-        "reference",
-    )
-    if not any(keyword in lower_text for keyword in payment_context_keywords):
-        return []
-
-    for match in _PAYMENT_CONTEXT_RE.finditer(text):
-        value = (match.group(1) or "").strip().lower()
-        if not value:
-            continue
-        if "@" in value:
-            if not value.endswith(("@gmail.com", "@yahoo.com", "@hotmail.com", "@outlook.com")):
-                payment_ids.append(value)
-            elif "upi" in lower_text or "payment" in lower_text:
-                payment_ids.append(value)
-        else:
-            if len(value) >= 5:
-                payment_ids.append(value)
-
-    return list(dict.fromkeys(payment_ids))
-
-
-def _extract_behavior_labels(text: str) -> list[str]:
-    text_lower = (text or "").lower()
-    matched = []
-    for label, phrases in _BEHAVIOR_PATTERNS.items():
-        if any(phrase in text_lower for phrase in phrases):
-            matched.append(label)
-    return matched
-
-
-def _text_similarity(left: str, right: str) -> float:
-    left_clean = _clean_text(left)
-    right_clean = _clean_text(right)
-    if not left_clean or not right_clean:
-        return 0.0
-    ratio = SequenceMatcher(None, left_clean.lower(), right_clean.lower()).ratio()
-    return round(ratio * 100, 2)
+    payment_ids = []
+    for match in _PAYMENT_ID_RE.finditer(text or ""):
+        value = match.group(1).lower().strip(".,;:)")
+        if value and value not in payment_ids:
+            payment_ids.append(value)
+    return payment_ids
 
 
 def _normalise_entities(entity_map: Mapping[str, Any] | None) -> dict[str, list[str]]:
-    entity_map = entity_map or {}
-    emails = []
-    phones = []
-    payment_ids = []
+    entity_map = entity_map if isinstance(entity_map, Mapping) else {}
 
-    for key in ("emails",):
-        value = entity_map.get(key, [])
-        if isinstance(value, (list, tuple, set)):
-            emails.extend(str(item).strip() for item in value)
-        elif value:
-            emails.append(str(value).strip())
+    def values(*keys: str) -> list[str]:
+        result = []
+        for key in keys:
+            value = entity_map.get(key, [])
+            items = value if isinstance(value, (list, tuple, set)) else [value]
+            result.extend(_clean_text(item) for item in items if item is not None)
+        return result
 
-    for key in ("phones",):
-        value = entity_map.get(key, [])
-        if isinstance(value, (list, tuple, set)):
-            phones.extend(str(item).strip() for item in value)
-        elif value:
-            phones.append(str(value).strip())
-
-    for key in ("payment_ids", "payment_id", "upi_ids", "upi_id"):
-        value = entity_map.get(key, [])
-        if isinstance(value, (list, tuple, set)):
-            payment_ids.extend(str(item).strip() for item in value)
-        elif value:
-            payment_ids.append(str(value).strip())
-
+    emails = [value.lower() for value in values("emails", "email") if value]
+    phones = [_normalise_phone(value) for value in values("phones", "phone")]
+    payment_ids = [value.lower() for value in values("payment_ids", "payment_id", "upi_ids", "upi_id") if value]
+    domains = [value.lower().strip("./") for value in values("domains", "domain") if value]
+    urls = [value.lower().rstrip(".,;:)") for value in values("urls", "url") if value]
     return {
-        "emails": list(dict.fromkeys(email.lower() for email in emails if email)),
-        "phones": list(dict.fromkeys(phone for phone in (_normalise_phone(p) for p in phones) if phone)),
-        "payment_ids": list(dict.fromkeys(payment_id.lower() for payment_id in payment_ids if payment_id)),
+        "phones": list(dict.fromkeys(value for value in phones if value)),
+        "emails": list(dict.fromkeys(emails)),
+        "domains": list(dict.fromkeys(domains)),
+        "payment_ids": list(dict.fromkeys(payment_ids)),
+        "urls": list(dict.fromkeys(urls)),
     }
+
+
+def _case_text(case: Mapping[str, Any]) -> str:
+    parts = []
+    for key in ("title", "company", "location", "salary", "snippet", "source", "type", "text", "message"):
+        value = case.get(key)
+        if value is not None:
+            parts.append(_clean_text(value))
+    return " ".join(part for part in parts if part)
 
 
 def _extract_case_entities(text: str, extra_entities: Mapping[str, Any] | None = None) -> dict[str, list[str]]:
-    entities = _normalise_entities(extra_entities)
-    entities["emails"] = list(dict.fromkeys(entities["emails"] + _extract_emails(text)))
-    entities["phones"] = list(dict.fromkeys(entities["phones"] + _extract_phone_numbers(text)))
-    entities["payment_ids"] = list(dict.fromkeys(entities["payment_ids"] + _extract_payment_ids(text)))
-    return entities
+    explicit = _normalise_entities(extra_entities)
+    extracted = {
+        "phones": _extract_phone_numbers(text),
+        "emails": _extract_emails(text),
+        "domains": _extract_domains(text),
+        "payment_ids": _extract_payment_ids(text),
+        "urls": _extract_urls(text),
+    }
+    return {key: list(dict.fromkeys(explicit[key] + extracted[key])) for key in extracted}
+
+
+def _extract_behavior_labels(text: str) -> list[str]:
+    lowered = (text or "").lower()
+    return [
+        label for label, phrases in _BEHAVIOR_PATTERNS.items()
+        if any(phrase in lowered for phrase in phrases)
+    ]
+
+
+def _text_similarity(left: str, right: str) -> float:
+    left_clean = _clean_text(left).lower()
+    right_clean = _clean_text(right).lower()
+    if not left_clean or not right_clean:
+        return 0.0
+    return round(SequenceMatcher(None, left_clean, right_clean).ratio() * 100, 2)
 
 
 def _load_historical_cases() -> list[dict[str, Any]]:
-    if get_local_campaign_jobs is not None:
-        try:
-            return list(get_local_campaign_jobs())
-        except Exception:
-            return []
-    return []
+    if get_local_campaign_jobs is None:
+        return []
+    try:
+        cases = get_local_campaign_jobs()
+    except Exception:
+        return []
+    return [case for case in cases if isinstance(case, Mapping)]
 
 
-def detect_campaign(
-    current_text,
-    current_entities=None,
-    historical_cases=None,
-):
-    """Check whether a current job posting appears connected to historical scam cases."""
-    if current_text is None:
-        current_text = ""
-    current_text = str(current_text)
-    if not current_text.strip():
-        return {
-            "campaign_detected": False,
-            "campaign_confidence": 0,
-            "connected_cases": 0,
-            "shared_entities": [],
-            "shared_behavior": [],
-            "matches": [],
-            "message": "No job text was submitted for campaign checking.",
-        }
-
-    if historical_cases is None:
-        historical_cases = _load_historical_cases()
-
-    current_entities = _extract_case_entities(current_text, current_entities)
-    current_behaviors = _extract_behavior_labels(current_text)
-
-    shared_entities_list = []
-    shared_behavior_set = set()
-    matches = []
-
-    for historical_case in historical_cases or []:
-        if not isinstance(historical_case, dict):
-            continue
-
-        case_text = historical_case.get("snippet") or historical_case.get("title") or historical_case.get("company") or ""
-        case_entities = _extract_case_entities(str(case_text), historical_case)
-        case_behaviors = _extract_behavior_labels(str(case_text))
-
-        shared_phones = sorted(set(current_entities["phones"]) & set(case_entities["phones"]))
-        shared_emails = sorted(set(current_entities["emails"]) & set(case_entities["emails"]))
-        shared_payment_ids = sorted(set(current_entities["payment_ids"]) & set(case_entities["payment_ids"]))
-        shared_behavior = sorted(set(current_behaviors) & set(case_behaviors))
-
-        shared_items = []
-        for value in shared_phones:
-            shared_items.append({
-                "type": "Phone",
-                "value": value,
-                "reason": "Same phone number found in another scam case.",
-            })
-        for value in shared_emails:
-            shared_items.append({
-                "type": "Email",
-                "value": value,
-                "reason": "Same email address found in another scam case.",
-            })
-        for value in shared_payment_ids:
-            shared_items.append({
-                "type": "Payment ID",
-                "value": value,
-                "reason": "Same payment or UPI ID found in another scam case.",
-            })
-
-        similarity = _text_similarity(current_text, str(case_text))
-        score = 0
-        if shared_phones:
-            score += 40
-        if shared_payment_ids:
-            score += 40
-        if shared_emails:
-            score += 30
-        score += len(shared_behavior) * 5
-        if similarity >= 70:
-            score += 10
-        score = min(score, 100)
-
-        matched = bool(shared_phones or shared_emails or shared_payment_ids or shared_behavior or similarity >= 70)
-        if matched and score > 0:
-            for item in shared_items:
-                shared_entities_list.append(item)
-            shared_behavior_set.update(shared_behavior)
-
-            matches.append({
-                "campaign_score": int(score),
-                "similarity": int(round(similarity)),
-                "shared_entities": shared_items,
-                "shared_behavior": shared_behavior,
-                "historical_case": historical_case,
-            })
-
-    unique_shared_entities = []
-    seen = set()
-    for item in shared_entities_list:
-        key = (item["type"], item["value"])
-        if key not in seen:
-            seen.add(key)
-            unique_shared_entities.append(item)
-
-    if matches:
-        campaign_confidence = max(match["campaign_score"] for match in matches)
-        campaign_detected = True
-        message = "Potential connection to existing scam campaigns found."
-    else:
-        campaign_confidence = 0
-        campaign_detected = False
-        message = "No strong campaign connection found in current historical scam records."
-
+def _entity_matches(current: Mapping[str, list[str]], historical: Mapping[str, list[str]]) -> dict[str, list[str]]:
     return {
-        "campaign_detected": campaign_detected,
-        "campaign_confidence": int(campaign_confidence),
-        "connected_cases": len(matches),
-        "shared_entities": unique_shared_entities,
-        "shared_behavior": sorted(shared_behavior_set),
-        "matches": matches,
-        "message": message,
+        key: sorted(set(current.get(key, [])) & set(historical.get(key, [])))
+        for key in ("phones", "emails", "domains", "payment_ids", "urls")
     }
 
 
-def detect_campaigns(
-    messages: Iterable[Mapping[str, Any] | str],
-    similarity_threshold: float = 0.72,
-    min_size: int = 2,
-):
-    """Legacy compatibility wrapper for grouped campaign detection.
+def _shared_indicator_objects(shared: Mapping[str, list[str]]) -> list[dict[str, str]]:
+    labels = {
+        "phones": ("Phone", "Same phone number found in both cases."),
+        "emails": ("Email", "Same email address found in both cases."),
+        "domains": ("Domain", "Same domain found in both cases."),
+        "payment_ids": ("Payment ID", "Same payment or UPI ID found in both cases."),
+        "urls": ("URL", "Same URL found in both cases."),
+    }
+    items = []
+    for key, values in shared.items():
+        label, reason = labels[key]
+        items.extend({"type": label, "value": value, "reason": reason} for value in values)
+    return items
 
-    This keeps the earlier function name working for any older code that still
-    expects the original group-based detector.
-    """
+
+def _score_connection(shared: Mapping[str, list[str]], shared_behavior: list[str], similarity: float) -> tuple[int, bool, list[str]]:
+    entity_types = [key for key, values in shared.items() if values]
+    entity_count = sum(len(values) for values in shared.values())
+    reasons = []
+    score = 0
+
+    if shared["payment_ids"]:
+        score += 55
+        reasons.append("Same payment ID found in both cases.")
+    if shared["phones"]:
+        score += 30
+        reasons.append("Same phone number found in both cases.")
+    if shared["emails"]:
+        score += 30
+        reasons.append("Same email address found in both cases.")
+    if shared["domains"]:
+        score += 25
+        reasons.append("Same domain found in both cases.")
+    if shared["urls"]:
+        score += 20
+        reasons.append("Same URL found in both cases.")
+
+    if entity_count > 1:
+        score += min(15, (entity_count - 1) * 5)
+        reasons.append("Multiple shared indicators strengthen the connection evidence.")
+    if shared_behavior:
+        score += min(20, len(shared_behavior) * 5)
+        reasons.append("Similar recruitment behavior detected.")
+    if similarity >= 80:
+        score += 15
+        reasons.append("Very similar recruitment wording detected.")
+    elif similarity >= 65:
+        score += 8
+        reasons.append("Some recruitment wording is similar.")
+
+    score = min(score, 100)
+    has_strong_entity = bool(shared["payment_ids"])
+    has_multiple_entities = len(entity_types) >= 2
+    has_entity_and_behavior = bool(entity_types) and len(shared_behavior) >= 2
+    has_strong_text_pattern = similarity >= 80 and len(shared_behavior) >= 3
+    connected = has_strong_entity or has_multiple_entities or has_entity_and_behavior or has_strong_text_pattern
+    return score if connected else 0, connected, reasons
+
+
+def detect_campaign(current_text, current_entities=None, historical_cases=None):
+    """Return explainable evidence for potential connections to historical cases."""
+    text = _clean_text(current_text)
+    empty_result = {
+        "status": "NO_CAMPAIGN_CONNECTION",
+        "campaign_detected": False,
+        "confidence": 0,
+        "campaign_confidence": 0,
+        "connected_cases": 0,
+        "shared_entities": [],
+        "shared_behavior": [],
+        "connection_reasons": [],
+        "matches": [],
+        "message": "No job text was submitted for campaign checking." if not text else "No meaningful shared evidence found in historical cases.",
+    }
+    if not text:
+        return empty_result
+
+    cases = historical_cases if historical_cases is not None else _load_historical_cases()
+    current = _extract_case_entities(text, current_entities)
+    current_behavior = _extract_behavior_labels(text)
+    matches = []
+    all_shared_entities = []
+    all_shared_behavior = set()
+    all_reasons = []
+
+    for case in cases or []:
+        if not isinstance(case, Mapping):
+            continue
+        case_text = _case_text(case)
+        if not case_text:
+            continue
+        historical = _extract_case_entities(case_text, case.get("entities"))
+        shared = _entity_matches(current, historical)
+        shared_behavior = sorted(set(current_behavior) & set(_extract_behavior_labels(case_text)))
+        similarity = _text_similarity(text, case_text)
+        score, connected, reasons = _score_connection(shared, shared_behavior, similarity)
+        if not connected:
+            continue
+
+        shared_items = _shared_indicator_objects(shared)
+        case_id = str(case.get("id", ""))
+        match = {
+            "case_id": case_id,
+            "title": _clean_text(case.get("title")) or "Historical suspicious case",
+            "company": _clean_text(case.get("company")) or "Unknown company",
+            "match_score": score,
+            "campaign_score": score,
+            "similarity": int(round(similarity)),
+            "shared_indicators": [item["type"] for item in shared_items],
+            "shared_entities": shared_items,
+            "shared_behavior": shared_behavior,
+            "reasons": reasons,
+            "connection_reasons": reasons,
+            "historical_case": dict(case),
+        }
+        matches.append(match)
+        all_shared_entities.extend(shared_items)
+        all_shared_behavior.update(shared_behavior)
+        all_reasons.extend(reasons)
+
+    unique_entities = []
+    seen_entities = set()
+    for item in all_shared_entities:
+        key = (item["type"], item["value"])
+        if key not in seen_entities:
+            seen_entities.add(key)
+            unique_entities.append(item)
+
+    unique_reasons = list(dict.fromkeys(all_reasons))
+    confidence = max((match["match_score"] for match in matches), default=0)
+    if confidence >= 70:
+        status = "STRONG_POTENTIAL_CONNECTION"
+    elif matches:
+        status = "POTENTIAL_CAMPAIGN"
+    else:
+        status = "NO_CAMPAIGN_CONNECTION"
+
+    return {
+        "status": status,
+        "campaign_detected": bool(matches),
+        "confidence": confidence,
+        "campaign_confidence": confidence,
+        "connected_cases": len(matches),
+        "shared_entities": unique_entities,
+        "shared_behavior": sorted(all_shared_behavior),
+        "connection_reasons": unique_reasons,
+        "matches": matches,
+        "message": (
+            "Potential campaign connections found through shared indicators and behavior."
+            if matches else
+            "No meaningful shared evidence found in historical cases."
+        ),
+    }
+
+
+def detect_campaigns(messages: Iterable[Mapping[str, Any] | str], similarity_threshold: float = 0.72, min_size: int = 2):
+    """Legacy grouped-detector wrapper retained for older callers."""
     records = []
-    for index, item in enumerate(messages):
+    for index, item in enumerate(messages or []):
         if isinstance(item, str):
-            text_value = item
+            text = item
             message_id = str(index)
-        else:
-            text_value = str(item.get("text", item.get("message", "")))
+        elif isinstance(item, Mapping):
+            text = _clean_text(item.get("text", item.get("message", item.get("snippet", ""))))
             message_id = str(item.get("id", index))
-        if text_value.strip():
-            records.append({"id": message_id, "snippet": text_value})
+        else:
+            continue
+        if text:
+            records.append({"id": message_id, "snippet": text})
 
     results = []
     for record in records:
-        result = detect_campaign(record["snippet"], historical_cases=records)
+        other_records = [item for item in records if item != record]
+        result = detect_campaign(record["snippet"], historical_cases=other_records)
         if result["campaign_detected"]:
             results.append({
                 "campaign_id": record["id"],
-                "campaign_detected": result["campaign_detected"],
+                "campaign_detected": True,
                 "campaign_confidence": result["campaign_confidence"],
                 "connected_cases": result["connected_cases"],
                 "matches": result["matches"],

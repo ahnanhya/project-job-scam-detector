@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 
 import Navbar from "./components/Navbar";
 import Home from "./components/Home";
@@ -12,6 +12,11 @@ import JobVerification from "./components/JobVerification";
 function App() {
 
   const [page, setPage] = useState("home");
+  const [theme, setTheme] = useState(() => localStorage.getItem("jobguard-theme") || "light");
+
+  useEffect(() => {
+    localStorage.setItem("jobguard-theme", theme);
+  }, [theme]);
 
 
   const [jobData, setJobData] = useState({
@@ -26,7 +31,8 @@ function App() {
       phones: []
     },
     campaign_indicators: [],
-    message: ""
+    message: "",
+    campaign_analysis: {}
   });
 
 
@@ -113,7 +119,9 @@ function App() {
         campaign_indicators:
           data.campaign_indicators,
 
-        message: data.message
+        message: data.message,
+
+        campaign_analysis: result.campaign_analysis || {}
       });
 
 
@@ -145,7 +153,7 @@ function App() {
 
   return (
 
-    <div className="app">
+    <div className={theme === "dark" ? "app dark-mode" : "app"}>
 
 
       {/* NAVBAR */}
@@ -153,6 +161,8 @@ function App() {
       <Navbar
         currentPage={page}
         onNavigate={setPage}
+        theme={theme}
+        onToggleTheme={() => setTheme(theme === "dark" ? "light" : "dark")}
       />
 
 
